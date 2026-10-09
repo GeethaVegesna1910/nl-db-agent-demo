@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+sqlparse
+pyyaml
+anthropic
+pydantic-settings
+python-dotenv
