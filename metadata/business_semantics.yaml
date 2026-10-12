@@ -1,0 +1,97 @@
+# Business definitions (the "semantic layer").
+#
+# This file says, in one place, how each business number is calculated, so the
+# agent works out "revenue" the same way every time it is asked. The text here
+# is added to the AI's instructions by app/database/semantic_layer.py.
+#
+# To change how a number is calculated, edit it here. No Python changes needed.
+#
+# Facts about the data these definitions rely on (checked against the tables):
+#   - orders.status is one of: completed, pending, cancelled
+#   - orders.total_amount equals the sum of quantity * unit_price over that
+#     order's rows in order_items
+#   - one order has between 1 and 5 rows in order_items
+
+version: 1
+
+metrics:
+  revenue:
+    description: Money earned from orders that were actually completed. Pending and cancelled orders earn nothing.
+    synonyms: [sales, turnover, income, earnings, takings, money made]
+    calculation: SUM(orders.total_amount)
+    filter: orders.status = 'completed'
+    notes: >
+      Use this form for a total, or when grouping by something that belongs to
+      the order or its customer (date, month, status, customer, city, state,
+      country). Do not join order_items for these.
+
+  product_revenue:
+    description: Revenue broken down by product or by product category.
+    synonyms: [sales by product, sales by category, revenue per product, revenue per category, category revenue, best-earning products]
+    calculation: SUM(order_items.quantity * order_items.unit_price)
+    filter: orders.status = 'completed'
+    notes: >
+      Join order_items to orders (for the status filter) and to products (for
+      name or category). Use order_items.unit_price, the price actually paid,
+      not products.price.
+
+  order_count:
+    description: How many orders were placed. Counts every order whatever its status, unless the question names a status.
+    synonyms: [number of orders, total orders, orders placed, how many orders]
+    calculation: COUNT(*) FROM orders
+    notes: >
+      If the question names a status ("cancelled orders", "completed orders",
+      "pending orders"), add WHERE orders.status = that status. If order_items
+      is joined for any reason, count with COUNT(DISTINCT orders.order_id).
+
+  customer_count:
+    description: How many customers are registered, whether or not they have ordered.
+    synonyms: [number of customers, total customers, how many customers, customer base]
+    calculation: COUNT(*) FROM customers
+    notes: >
+      Only when the question is about customers who bought something ("active
+      customers", "customers who ordered", "buyers") use
+      COUNT(DISTINCT orders.customer_id) instead.
+
+  average_order_value:
+    description: Revenue divided by the number of completed orders.
+    synonyms: [AOV, average order size, average basket, average spend per order, average order amount]
+    calculation: AVG(orders.total_amount)
+    filter: orders.status = 'completed'
+    notes: Calculate it from the orders table alone. Do not join order_items.
+
+  top_products_by_quantity:
+    description: The products that sold the most units, in completed orders.
+    synonyms: [best sellers, best-selling products, most popular products, most sold products, top products]
+    calculation: SUM(order_items.quantity)
+    filter: orders.status = 'completed'
+    notes: >
+      Group by product, sort highest first, and LIMIT to the number asked for
+      (10 if no number is given). "Top products" with no other detail means by
+      quantity.
+
+  top_products_by_revenue:
+    description: The products that brought in the most money, in completed orders.
+    synonyms: [highest-revenue products, top-earning products, top products by sales, most valuable products]
+    calculation: SUM(order_items.quantity * order_items.unit_price)
+    filter: orders.status = 'completed'
+    notes: Group by product, sort highest first, and LIMIT to the number asked for (10 if no number is given).
+
+rules:
+  - name: no double counting
+    rule: >
+      Never SUM (or AVG) orders.total_amount in a query that joins order_items.
+      An order with 3 items appears as 3 joined rows, so its total would be
+      added 3 times and the answer would be far too high. When a question needs
+      revenue per product or per category, add up
+      order_items.quantity * order_items.unit_price instead.
+
+  - name: completed orders only for money and units sold
+    rule: >
+      Revenue, average order value and "units sold" count completed orders only
+      (orders.status = 'completed'), unless the question explicitly asks about
+      pending or cancelled orders.
+
+  - name: all time by default
+    rule: >
+      Do not add a date filter unless the question mentions a time period.

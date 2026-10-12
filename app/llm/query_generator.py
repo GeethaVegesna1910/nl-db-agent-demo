@@ -2,7 +2,8 @@
 
 The flow for every question:
 
-    1. Build a system prompt that describes the business tables.
+    1. Build a system prompt that describes the business tables and the
+       business definitions (what "revenue" means, and so on).
     2. Send the question (plus recent chat, if any) to Claude.
     3. Claude replies with ONE of:
          - a SELECT statement
@@ -21,6 +22,7 @@ import anthropic
 
 from app.config import settings
 from app.database.schema import SchemaIntrospector, schema_introspector
+from app.database.semantic_layer import SemanticLayer, semantic_layer
 from app.security.sql_validator import SQLValidator, sql_validator
 
 # The two special replies Claude may give instead of SQL.
@@ -38,6 +40,14 @@ The database is PostgreSQL 15. These are the only tables you can use:
 <schema>
 {schema}
 </schema>
+
+The business has agreed definitions for its key numbers. Follow them exactly, \
+so the same question always gets the same answer. They take priority over your \
+own reading of a word such as "revenue" or "top":
+
+<business_definitions>
+{semantics}
+</business_definitions>
 
 Reply forms:
 
@@ -59,8 +69,6 @@ Writing the SQL:
 - Use only the tables and columns listed in the schema. Do not query system \
 catalogs (pg_* or information_schema); a safety checker rejects them.
 - Give calculated columns clear names with AS, so the result is readable.
-- "Revenue" and "sales" mean money from completed orders unless the question \
-says otherwise.
 - The user's message may include the recent conversation. Use it to work out \
 what a short follow-up such as "and by category?" refers to: usually the same \
 measure and filters as the previous question, with the one change asked for.
@@ -90,6 +98,7 @@ class QueryGenerator:
         client: Optional[anthropic.Anthropic] = None,
         schema: Optional[SchemaIntrospector] = None,
         validator: Optional[SQLValidator] = None,
+        semantics: Optional[SemanticLayer] = None,
         model: Optional[str] = None,
         max_retries: Optional[int] = None,
     ):
@@ -99,6 +108,7 @@ class QueryGenerator:
         )
         self._schema = schema or schema_introspector
         self._validator = validator or sql_validator
+        self._semantics = semantics or semantic_layer
         self.model = model or settings.anthropic_model
         self.max_retries = settings.max_retries if max_retries is None else max_retries
 
@@ -116,7 +126,10 @@ class QueryGenerator:
 
         # The schema helper already hides the chat tables, so Claude never
         # learns they exist.
-        system = SYSTEM_PROMPT.format(schema=self._schema.describe())
+        system = SYSTEM_PROMPT.format(
+            schema=self._schema.describe(),
+            semantics=self._semantics.describe(),
+        )
         messages = [{"role": "user", "content": self._user_message(question, context)}]
 
         error = None
