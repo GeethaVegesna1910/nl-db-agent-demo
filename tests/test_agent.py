@@ -6,6 +6,7 @@ ANTHROPIC_API_KEY in .env and the Phase 1 database to be running.
 Run with pytest, or directly to see a PASS/FAIL line per check:
     python tests/test_agent.py
 """
+import json
 import sys
 import uuid
 from pathlib import Path
@@ -59,10 +60,17 @@ def test_first_question_starts_a_conversation_and_returns_rows():
     assert isinstance(result["answer"], str) and result["answer"]
     assert "country" in result["sql"].lower()
     assert result["columns"] and result["rows"]
+    # The formatter's additions (Phase 7), and the whole answer is JSON-friendly.
+    assert result["summary"] == result["answer"]
+    assert result["chart"] in ("number", "bar", "line", "table")
+    assert isinstance(result["highlights"], list)
+    assert 2 <= len(result["follow_ups"]) <= 3
+    json.dumps(result)
 
     history = ConversationStore().get_history(result["conversation_id"])
     assert [m["role"] for m in history[:2]] == ["user", "assistant"]
     assert history[0]["content"] == "show revenue by country"
+    assert history[1]["content"] == result["summary"]
     assert history[1]["sql_used"] == result["sql"]
 
 
@@ -103,7 +111,9 @@ def test_delete_is_refused_and_the_refusal_is_saved():
 
     assert result["sql"] is None
     assert result["columns"] == [] and result["rows"] == []
-    assert result["answer"]
+    assert result["answer"] and result["summary"] == result["answer"]
+    assert result["chart"] is None
+    assert result["highlights"] == [] and result["follow_ups"] == []
     assert order_count() == orders_before
 
     question, refusal = ConversationStore().get_history(chat, limit=2)

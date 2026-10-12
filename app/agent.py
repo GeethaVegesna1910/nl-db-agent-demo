@@ -4,6 +4,7 @@
        -> ConversationStore   recent chat, so follow-ups make sense   (Phase 3)
        -> QueryGenerator      Claude writes one SELECT                (Phase 4)
        -> QueryExecutor       runs it as the read-only database user  (Phase 2)
+       -> ResultFormatter     summary, chart type, highlights, ideas  (Phase 7)
        -> ConversationStore   saves the question and the answer       (Phase 3)
 
 The agent keeps nothing in memory between questions. Everything it needs to
@@ -13,7 +14,8 @@ days later) carries on from the conversation_id alone.
 from typing import Any, Dict, List, Optional
 
 from app.context.conversation_store import ConversationStore
-from app.database.executor import QueryExecutor, QueryResult
+from app.database.executor import QueryExecutor
+from app.format.result_formatter import ResultFormatter, json_safe
 from app.llm.query_generator import QueryGenerator, QuestionRejected
 
 # Shown instead of technical details when something breaks.
@@ -30,9 +32,11 @@ class NLDBAgent:
         store: Optional[ConversationStore] = None,
         generator: Optional[QueryGenerator] = None,
         executor: Optional[QueryExecutor] = None,
+        formatter: Optional[ResultFormatter] = None,
     ):
         self._store = store or ConversationStore()
         self._executor = executor or QueryExecutor()
+        self._formatter = formatter or ResultFormatter()
         # Created on first use, so listing or reading chats works without an API key.
         self._generator = generator
 
@@ -44,7 +48,9 @@ class NLDBAgent:
     ) -> Dict[str, Any]:
         """Answer one question and remember the exchange.
 
-        Returns a dict with: conversation_id, answer, sql, columns, rows.
+        Returns a dict with: conversation_id, answer, sql, columns, rows, and
+        from the formatter: summary, chart, highlights, follow_ups. "answer" and
+        "summary" hold the same sentence. Every value is JSON-friendly.
         Pass the returned conversation_id back in to ask a follow-up.
         """
         question = (question or "").strip()
@@ -68,6 +74,10 @@ class NLDBAgent:
         saved_sql: Optional[str] = None
         columns: List[str] = []
         rows: List[List[Any]] = []
+        # What the formatter adds. These stay empty when there is no result.
+        chart: Optional[str] = None
+        highlights: List[str] = []
+        follow_ups: List[str] = []
         try:
             # 3. Claude writes the SQL (already checked by the validator).
             if self._generator is None:
@@ -77,8 +87,19 @@ class NLDBAgent:
             # 4. Run it as the read-only database user.
             result = self._executor.execute(sql)
             if result.success:
-                answer = self._describe(result)
-                columns, rows = result.columns, result.rows
+                # 5. Turn the rows into a sentence, a chart type and some pointers.
+                formatted = self._formatter.format(question, sql, result.columns, result.rows)
+                answer = formatted["summary"]
+                chart = formatted["chart"]
+                highlights = formatted["highlights"]
+                follow_ups = formatted["follow_ups"]
+                if result.truncated:
+                    highlights = highlights + [
+                        "Only the first {:,} rows are shown; there are more.".format(result.row_count)
+                    ]
+                # Decimal and date values become plain numbers and text, so the
+                # whole answer can be sent as JSON.
+                columns, rows = result.columns, json_safe(result.rows)
                 saved_sql = sql
             else:
                 answer = TIMEOUT_ERROR if result.error_type == "timeout" else QUERY_ERROR
@@ -91,7 +112,7 @@ class NLDBAgent:
             # friendly sentence rather than a stack trace.
             answer = GENERAL_ERROR
 
-        # 5. Remember both sides. Only SQL that actually worked is saved, so a
+        # 6. Remember both sides. The summary sentence is the assistant's message. Only SQL that actually worked is saved, so a
         #    broken query is never offered to Claude as an example later.
         self._store.add_message(conversation_id, "user", question)
         self._store.add_message(conversation_id, "assistant", answer, sql_used=saved_sql)
@@ -102,21 +123,8 @@ class NLDBAgent:
             "sql": sql,
             "columns": columns,
             "rows": rows,
+            "summary": answer,
+            "chart": chart,
+            "highlights": highlights,
+            "follow_ups": follow_ups,
         }
-
-    @staticmethod
-    def _describe(result: QueryResult) -> str:
-        """Sum up a query result in one short sentence."""
-        if result.row_count == 0:
-            return "No matching data was found."
-        if result.row_count == 1 and len(result.columns) == 1:
-            # A single number or name, e.g. "total_revenue: 48210.50"
-            return "{}: {}".format(result.columns[0].replace("_", " "), result.rows[0][0])
-        sentence = "Found {} row{} showing {}.".format(
-            result.row_count,
-            "" if result.row_count == 1 else "s",
-            ", ".join(c.replace("_", " ") for c in result.columns),
-        )
-        if result.truncated:
-            sentence += " There are more rows than this; only the first ones are shown."
-        return sentence

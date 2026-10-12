@@ -109,12 +109,20 @@ def main():
         result = agent.ask(question, conversation_id=conversation_id, user_id=args.user)
         conversation_id = result["conversation_id"]  # set on the first question of a new chat
 
-        print("\nAgent: {}".format(result["answer"]))
+        print("\nAgent: {}".format(result["summary"]))
         if result["sql"]:
             print("\nSQL: {}".format(result["sql"]))
         if result["rows"]:
             print()
             print_table(result["columns"], result["rows"])
+        if result["highlights"]:
+            print("\nWorth noticing:")
+            for highlight in result["highlights"]:
+                print("  ! {}".format(highlight))
+        if result["follow_ups"]:
+            print("\nYou could ask next:")
+            for follow_up in result["follow_ups"]:
+                print("  - {}".format(follow_up))
         print()
 
     if conversation_id is not None:
