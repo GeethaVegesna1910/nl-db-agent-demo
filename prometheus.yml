@@ -1,0 +1,13 @@
+# What Prometheus collects. It fetches the API's /metrics page every few
+# seconds and stores the numbers so they can be graphed at http://localhost:9091
+
+global:
+  scrape_interval: 10s
+
+scrape_configs:
+  - job_name: api
+    metrics_path: /metrics
+    static_configs:
+      # "api" is the service name in docker-compose.yml; 8000 is its port
+      # inside Docker (8001 is only the port on your own machine).
+      - targets: ["api:8000"]

@@ -4,6 +4,7 @@
     POST /query                            ask a question
     GET  /conversations                    list a user's chats, newest first
     GET  /conversations/{id}/messages      read one chat's history
+    GET  /metrics                          counters for Prometheus (monitoring)
 
 Start it from the project folder with:
     uvicorn app.api.main:app --reload --port 8001
@@ -24,17 +25,20 @@ from typing import Any, Dict, List, Optional
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field, field_validator
 
 from app.agent import NLDBAgent
+from app.api import metrics
 from app.context.conversation_store import ConversationStore
 from app.database.connection import check_connection
 
 MAX_QUESTION_LENGTH = 500
 MAX_USER_ID_LENGTH = 100
 # Websites allowed to call this API from a browser (the future front end).
-ALLOWED_ORIGINS = ["http://localhost:5173", "http://localhost:3000"]
+# 5173 is the Vite dev server, 8080 the Docker build of the site.
+ALLOWED_ORIGINS = ["http://localhost:5173", "http://localhost:3000", "http://localhost:8080"]
 SERVER_ERROR = "Sorry, something went wrong on our side. Please try again."
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -96,10 +100,20 @@ async def log_requests(request: Request, call_next):
         # Something we did not plan for. The full details go to the log only;
         # the caller gets a friendly sentence, never a Python error trace.
         logger.exception("[%s] %s %s failed", request_id, request.method, request.url.path)
+        metrics.ERRORS.labels(kind="server").inc()
         response = JSONResponse(
             status_code=500, content={"detail": SERVER_ERROR, "request_id": request_id}
         )
     elapsed_ms = (time.perf_counter() - started) * 1000
+
+    # Count the request for monitoring. The route pattern is used as the name
+    # ("/conversations/{conversation_id}/messages"), and anything that matched
+    # no route is grouped together, so random addresses can't flood the metrics.
+    route = request.scope.get("route")
+    endpoint = getattr(route, "path", "unmatched")
+    metrics.REQUESTS.labels(request.method, endpoint, str(response.status_code)).inc()
+    metrics.REQUEST_SECONDS.labels(request.method, endpoint).observe(elapsed_ms / 1000)
+
     # The question text is deliberately not logged: it may contain private details.
     logger.info(
         "[%s] %s %s -> %s (%.0f ms)",
@@ -201,7 +215,15 @@ def query(
         require_conversation(store, body.conversation_id, body.user_id)
     # A refused question is not an error: the agent returns a polite sentence
     # as the summary, with sql set to None.
-    return agent.ask(body.question, conversation_id=body.conversation_id, user_id=body.user_id)
+    result = agent.ask(body.question, conversation_id=body.conversation_id, user_id=body.user_id)
+    metrics.record_question(result.get("status", "error"))
+    return result
+
+
+@app.get("/metrics", include_in_schema=False)
+def prometheus_metrics() -> Response:
+    """Counters in the text format Prometheus reads. Not meant for people."""
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/conversations")

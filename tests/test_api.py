@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
 from fastapi.testclient import TestClient
+from prometheus_client import REGISTRY
 from sqlalchemy import text
 
 from app.agent import NLDBAgent
@@ -206,6 +207,82 @@ def test_errors_never_show_a_python_trace():
     assert body["detail"] == SERVER_ERROR
     assert body["request_id"] == crashed.headers["X-Request-ID"]
     assert "secret" not in crashed.text and "Traceback" not in crashed.text
+
+
+def metric(name, **labels):
+    """Current value of one counter (0 if it has never been touched)."""
+    return REGISTRY.get_sample_value(name, labels) or 0.0
+
+
+def test_metrics_endpoint_lists_the_counters():
+    response = client().get("/metrics")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    for name in (
+        "nldb_http_requests_total",
+        "nldb_http_request_duration_seconds_bucket",
+        "nldb_questions_answered_total",
+        'nldb_questions_rejected_total{reason="refused"}',
+        'nldb_questions_rejected_total{reason="cannot_answer"}',
+        'nldb_errors_total{kind="question"}',
+        'nldb_errors_total{kind="server"}',
+    ):
+        assert name in response.text, name
+
+
+def test_metrics_count_requests_by_endpoint_and_status():
+    ok = dict(method="GET", endpoint="/health", status="200")
+    before = metric("nldb_http_requests_total", **ok)
+    timed_before = metric("nldb_http_request_duration_seconds_count", method="GET", endpoint="/health")
+    client().get("/health")
+    client().get("/health")
+    assert metric("nldb_http_requests_total", **ok) == before + 2
+    assert metric("nldb_http_request_duration_seconds_count", method="GET", endpoint="/health") == timed_before + 2
+
+    # Failures are counted under their own status...
+    rejected = dict(method="POST", endpoint="/query", status="422")
+    before = metric("nldb_http_requests_total", **rejected)
+    ask("")
+    assert metric("nldb_http_requests_total", **rejected) == before + 1
+
+    # ...and chat ids are folded into one endpoint name, however many chats exist.
+    pattern = dict(method="GET", endpoint="/conversations/{conversation_id}/messages", status="404")
+    before = metric("nldb_http_requests_total", **pattern)
+    client().get("/conversations/999999998/messages", params={"user_id": USER})
+    client().get("/conversations/999999999/messages", params={"user_id": USER})
+    assert metric("nldb_http_requests_total", **pattern) == before + 2
+    assert "999999999" not in client().get("/metrics").text
+
+    # Addresses that don't exist share one name too.
+    unmatched = dict(method="GET", endpoint="unmatched", status="404")
+    before = metric("nldb_http_requests_total", **unmatched)
+    client().get("/no-such-page")
+    assert metric("nldb_http_requests_total", **unmatched) == before + 1
+
+
+def test_metrics_count_answered_refused_and_failed_questions():
+    answered = metric("nldb_questions_answered_total")
+    refused = metric("nldb_questions_rejected_total", reason="refused")
+    question_errors = metric("nldb_errors_total", kind="question")
+    server_errors = metric("nldb_errors_total", kind="server")
+
+    ask("show revenue by category")
+    ask("delete all orders")
+    ask("please explode")  # the pretend generator raises: a failed question
+
+    assert metric("nldb_questions_answered_total") == answered + 1
+    assert metric("nldb_questions_rejected_total", reason="refused") == refused + 1
+    assert metric("nldb_errors_total", kind="question") == question_errors + 1
+    assert metric("nldb_errors_total", kind="server") == server_errors
+
+    # A crash nobody planned for is counted as a server error.
+    real_agent = app.dependency_overrides[get_agent]
+    app.dependency_overrides[get_agent] = lambda: BrokenAgent()
+    try:
+        ask("anything")
+    finally:
+        app.dependency_overrides[get_agent] = real_agent
+    assert metric("nldb_errors_total", kind="server") == server_errors + 1
 
 
 def test_cors_allows_the_website_and_nobody_else():

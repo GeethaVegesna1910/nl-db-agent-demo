@@ -1,3 +1,17 @@
+# Runs the whole project: database, API, website and monitoring.
+#
+#   docker compose up -d --build     start everything
+#   docker compose ps                see what is running and healthy
+#   docker compose logs -f api       follow the API's log
+#   docker compose down              stop (the database's data is kept)
+#
+# Ports on your machine, chosen not to clash with other projects:
+#   postgres 5433 | api 8001 | website 8080 | prometheus 9091
+
+# A fixed project name, so containers and the data volume keep the same names
+# wherever the folder lives.
+name: nl-db-agent-demo
+
 services:
   postgres:
     image: postgres:15
@@ -7,7 +21,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: nl_db_agent
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -15,6 +29,69 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  api:
+    build: .
+    container_name: nl-db-agent-demo-api
+    # Secrets (ANTHROPIC_API_KEY, ...) are read from .env when the container
+    # starts. They are never copied into the image. "required: false" lets the
+    # stack start without a .env; questions then get a friendly error.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Inside Docker the database is reached by its service name, "postgres",
+      # on its own port 5432. This overrides the localhost address in .env,
+      # which is only right when the API runs directly on your machine.
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/nl_db_agent
+    ports:
+      - "8001:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy   # wait until the database accepts connections
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # The address the visitor's browser uses to reach the API.
+        VITE_API_URL: http://localhost:8001
+    container_name: nl-db-agent-demo-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: nl-db-agent-demo-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9091:9090"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9090/-/healthy"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
 
 volumes:
   postgres_data:

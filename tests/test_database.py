@@ -68,6 +68,23 @@ def test_row_limit_truncates():
     assert result.truncated
 
 
+def test_default_limits_are_1000_rows_and_a_statement_timeout():
+    """The shared executor, exactly as the agent uses it, with no overrides."""
+    assert query_executor.max_rows == 1000
+    assert 0 < query_executor.timeout_seconds <= 30
+
+    # Ask for 1,500 rows: only 1,000 come back, and the result says it was cut.
+    result = query_executor.execute("SELECT n FROM generate_series(1, 1500) AS n")
+    assert result.success, result.error
+    assert result.row_count == 1000
+    assert len(result.rows) == 1000
+    assert result.truncated
+
+    # The timeout really is switched on in the database for each query.
+    shown = QueryExecutor(validator=AllowEverything()).execute("SHOW statement_timeout")
+    assert shown.rows == [["{}s".format(query_executor.timeout_seconds)]]
+
+
 def test_validation_failure_is_not_executed():
     before = order_count()
     result = query_executor.execute("DELETE FROM orders")

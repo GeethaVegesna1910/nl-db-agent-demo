@@ -1,0 +1,9 @@
+# The website image is built from this folder, so it needs its own list.
+node_modules
+dist
+.env
+.env.*
+!.env.example
+.git
+*.log
+.DS_Store

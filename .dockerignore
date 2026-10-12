@@ -1,0 +1,39 @@
+# Files that must never be copied into a Docker image.
+
+# Secrets
+.env
+**/.env
+.env.*
+**/.env.*
+!.env.example
+!**/.env.example
+
+# Git history and local environments
+.git
+.gitignore
+venv
+.venv
+**/node_modules
+**/dist
+
+# Not needed by the API image
+frontend
+tests
+scripts
+chat.py
+README.md
+docker-compose.yml
+prometheus.yml
+Dockerfile
+.dockerignore
+
+# Python and editor leftovers
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.vscode
+.idea
+.DS_Store
+.claude

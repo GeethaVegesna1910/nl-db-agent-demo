@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 from app.context.conversation_store import ConversationStore
 from app.database.executor import QueryExecutor
 from app.format.result_formatter import ResultFormatter, json_safe
-from app.llm.query_generator import QueryGenerator, QuestionRejected
+from app.llm.query_generator import REFUSED, QueryGenerator, QuestionRejected
 
 # Shown instead of technical details when something breaks.
 GENERAL_ERROR = "Sorry, something went wrong while answering that. Please try again."
@@ -51,6 +51,7 @@ class NLDBAgent:
         Returns a dict with: conversation_id, answer, sql, columns, rows, and
         from the formatter: summary, chart, highlights, follow_ups. "answer" and
         "summary" hold the same sentence. Every value is JSON-friendly.
+        "status" says how it ended: "answered", "refused", "cannot_answer" or "error".
         Pass the returned conversation_id back in to ask a follow-up.
         """
         question = (question or "").strip()
@@ -78,6 +79,7 @@ class NLDBAgent:
         chart: Optional[str] = None
         highlights: List[str] = []
         follow_ups: List[str] = []
+        status = "error"  # changed below once we know how the question ended
         try:
             # 3. Claude writes the SQL (already checked by the validator).
             if self._generator is None:
@@ -101,12 +103,14 @@ class NLDBAgent:
                 # whole answer can be sent as JSON.
                 columns, rows = result.columns, json_safe(result.rows)
                 saved_sql = sql
+                status = "answered"
             else:
                 answer = TIMEOUT_ERROR if result.error_type == "timeout" else QUERY_ERROR
         except QuestionRejected as rejected:
             # Claude declined (data change, or not in the database). Its reason
             # is written for the user, so it becomes the answer. No SQL exists.
             answer = rejected.reason
+            status = "refused" if rejected.kind == REFUSED else "cannot_answer"
         except Exception:
             # Anything else (network down, bad API key, ...). The user gets a
             # friendly sentence rather than a stack trace.
@@ -127,4 +131,5 @@ class NLDBAgent:
             "chart": chart,
             "highlights": highlights,
             "follow_ups": follow_ups,
+            "status": status,
         }
