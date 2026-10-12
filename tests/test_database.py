@@ -1,8 +1,9 @@
 """Integration tests. They need the seeded database from Phase 1 to be running."""
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 
-from app.database.connection import check_connection, engine
+from app.database.connection import agent_engine, check_connection, engine
 from app.database.executor import QueryExecutor, query_executor
 from app.database.schema import schema_introspector
 from app.security.sql_validator import ValidationResult
@@ -98,6 +99,27 @@ def test_writes_fail_even_if_validation_is_bypassed():
     assert not result.success
     assert result.error_type == "database"
     assert "read-only" in result.error
+    assert order_count() == before
+
+
+@pytest.mark.parametrize("table", ["messages", "conversations"])
+def test_chat_history_is_unreadable_even_if_validation_is_bypassed(table):
+    result = QueryExecutor(validator=AllowEverything()).execute(
+        "SELECT * FROM {}".format(table)
+    )
+    assert not result.success
+    assert result.error_type == "database"
+    assert "permission denied" in result.error
+
+
+def test_agent_role_cannot_write_even_in_a_read_write_transaction():
+    before = order_count()
+    for statement in ("DELETE FROM orders", "CREATE TABLE agent_scratch (id int)"):
+        with agent_engine.connect() as conn:
+            # Switch off the role's read-only default, leaving only its permissions.
+            conn.execute(text("SET TRANSACTION READ WRITE"))
+            with pytest.raises(ProgrammingError, match="permission denied"):
+                conn.execute(text(statement))
     assert order_count() == before
 
 

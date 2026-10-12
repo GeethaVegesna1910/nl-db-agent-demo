@@ -1,8 +1,9 @@
 """Decide whether a SQL string is a single read-only query.
 
 This is the first of two safety layers. The second is QueryExecutor, which runs
-every query inside a READ ONLY transaction, so anything that slips past these
-checks still cannot modify data.
+every query inside a READ ONLY transaction as a database role that can only
+SELECT from the business tables, so anything that slips past these checks still
+cannot modify data or read chat history.
 """
 from dataclasses import dataclass
 from typing import Optional

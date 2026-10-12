@@ -1,4 +1,8 @@
-"""Run LLM-written SQL safely: validate, then execute read-only with a timeout and row cap."""
+"""Run LLM-written SQL safely: validate, then execute read-only with a timeout and row cap.
+
+Queries run as the restricted agent role (see scripts/init_db.py), which has no
+access to anything but SELECT on the business tables.
+"""
 import time
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
@@ -9,7 +13,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import settings
-from app.database.connection import engine as default_engine
+from app.database.connection import agent_engine as default_engine
 from app.security.sql_validator import SQLValidator, sql_validator
 
 

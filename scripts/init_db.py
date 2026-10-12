@@ -4,6 +4,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import re
+
 from sqlalchemy import create_engine, text
 
 from app.config import settings
@@ -75,11 +77,43 @@ CREATE INDEX IF NOT EXISTS idx_conversations_user_id     ON conversations (user_
 CREATE INDEX IF NOT EXISTS idx_messages_conversation_id  ON messages (conversation_id, id);
 """
 
+# The only tables the agent's login may read. conversations and messages are
+# deliberately missing, so PostgreSQL itself refuses to show it chat history.
+AGENT_READABLE_TABLES = ["customers", "products", "orders", "order_items"]
+
+
+def create_agent_role(conn) -> None:
+    """Create (or refresh) the read-only login that LLM-written SQL runs as."""
+    role = settings.agent_db_user
+    # A role name cannot be sent as a query parameter, so check it before
+    # putting it into the SQL text.
+    if not re.fullmatch(r"[a-z_][a-z0-9_]*", role):
+        raise ValueError("AGENT_DB_USER must be lowercase letters, digits and underscores")
+
+    exists = conn.execute(
+        text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}
+    ).scalar()
+    conn.execute(
+        text("{} ROLE {} LOGIN PASSWORD :password".format("ALTER" if exists else "CREATE", role)),
+        {"password": settings.agent_db_password},
+    )
+    # Start from nothing, then hand back only SELECT on the business tables.
+    conn.execute(text("REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {}".format(role)))
+    conn.execute(text("REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {}".format(role)))
+    conn.execute(text("GRANT USAGE ON SCHEMA public TO {}".format(role)))
+    conn.execute(text("GRANT SELECT ON {} TO {}".format(", ".join(AGENT_READABLE_TABLES), role)))
+    # Extra belt: every transaction this role opens starts out read-only.
+    conn.execute(text("ALTER ROLE {} SET default_transaction_read_only = on".format(role)))
+
 
 def main() -> None:
     engine = create_engine(settings.database_url)
     with engine.begin() as conn:
         conn.execute(text(SCHEMA))
+        create_agent_role(conn)
+    print("Read-only role ready: {} (SELECT on {})".format(
+        settings.agent_db_user, ", ".join(AGENT_READABLE_TABLES)
+    ))
     print("Tables ready: customers, products, orders, order_items, conversations, messages")
 
 

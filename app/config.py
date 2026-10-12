@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://postgres:postgres@localhost:5432/nl_db_agent"
     database_pool_size: int = 5
     database_max_overflow: int = 10
+    # Restricted login used to run LLM-written SQL. It connects to the same
+    # database as database_url but can only SELECT from the business tables.
+    agent_db_user: str = "agent_readonly"
+    agent_db_password: str = "agent_readonly"
 
     # Query execution
     max_query_rows: int = 1000
