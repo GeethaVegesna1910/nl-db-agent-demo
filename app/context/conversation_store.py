@@ -111,6 +111,19 @@ class ConversationStore:
             ).mappings().all()
         return [dict(row) for row in rows]
 
+    def get_conversation(self, conversation_id: int, user_id: str = "demo") -> Optional[Dict[str, Any]]:
+        """Return one conversation, or None if it doesn't exist or belongs to someone else."""
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT id, title, created_at, last_active_at "
+                    "FROM conversations "
+                    "WHERE id = :id AND user_id = :user_id"
+                ),
+                {"id": conversation_id, "user_id": user_id},
+            ).mappings().first()
+        return dict(row) if row else None
+
     def build_context(self, conversation_id: int, limit: int = 6) -> str:
         """Return the recent turns as plain text, ready to paste into an AI prompt.
 

@@ -62,7 +62,7 @@ class NLDBAgent:
             conversation_id = self._store.create_conversation(
                 user_id, title=question[:TITLE_LENGTH]
             )
-        elif conversation_id not in [c["id"] for c in self._store.list_conversations(user_id)]:
+        elif self._store.get_conversation(conversation_id, user_id) is None:
             # Also stops one user from continuing another user's chat.
             raise ValueError("No conversation {} for user {!r}".format(conversation_id, user_id))
 
