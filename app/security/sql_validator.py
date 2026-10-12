@@ -27,8 +27,11 @@ FORBIDDEN_NAMES = {
     "lo_import", "lo_export", "lo_unlink", "set_config", "current_setting",
     "query_to_xml", "query_to_xml_and_xmlschema", "database_to_xml", "table_to_xml",
     "nextval", "setval",
+    "uescape",  # U&"!0070g_sleep" UESCAPE '!' would hide a name behind a custom escape
 }
 FORBIDDEN_NAME_PREFIXES = ("pg_",)
+# Application-private tables (chat history). The agent must never read these.
+PRIVATE_TABLES = {"conversations", "messages"}
 
 
 @dataclass
@@ -67,7 +70,15 @@ class SQLValidator:
                     return self._reject("'{}' is not allowed in read-only queries.".format(word))
             if token.ttype in T.Name or token.ttype in T.Keyword or token.ttype in T.Literal.String.Symbol:
                 name = token.value.strip('"').lower()
-                if name in FORBIDDEN_NAMES or name.startswith(FORBIDDEN_NAME_PREFIXES):
+                # U&"\0070g_sleep" spells pg_sleep with Unicode escapes, hiding it from the
+                # name checks below. Real identifiers here never contain a backslash.
+                if token.ttype in T.Literal.String.Symbol and "\\" in name:
+                    return self._reject("Escaped identifiers are not allowed.")
+                if (
+                    name in FORBIDDEN_NAMES
+                    or name in PRIVATE_TABLES
+                    or name.startswith(FORBIDDEN_NAME_PREFIXES)
+                ):
                     return self._reject("Access to '{}' is not allowed.".format(name))
 
         return ValidationResult(is_valid=True, sql=cleaned)

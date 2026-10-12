@@ -5,6 +5,7 @@ from sqlalchemy import inspect
 from sqlalchemy.engine import Engine
 
 from app.database.connection import engine as default_engine
+from app.security.sql_validator import PRIVATE_TABLES
 
 
 class SchemaIntrospector:
@@ -19,6 +20,7 @@ class SchemaIntrospector:
             self._cache = {
                 table: self._describe_table(inspector, table)
                 for table in sorted(inspector.get_table_names())
+                if table not in PRIVATE_TABLES  # chat history is never shown to the LLM
             }
         return self._cache
 

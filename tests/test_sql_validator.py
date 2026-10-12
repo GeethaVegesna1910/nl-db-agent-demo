@@ -44,6 +44,14 @@ REJECTED = [
     "SELECT * FROM information_schema.tables",
     "SELECT lo_import('/etc/passwd')",
     "SELECT set_config('statement_timeout', '0', false)",
+    "SELECT * FROM messages",
+    "SELECT content FROM public.messages",
+    'SELECT * FROM "conversations"',
+    "SELECT * FROM orders o JOIN Conversations c ON c.id = o.order_id",
+    "SELECT (SELECT content FROM messages LIMIT 1) FROM products",
+    'SELECT * FROM U&"\\006dessages"',
+    'SELECT U&"\\0070g_sleep"(60)',
+    'SELECT * FROM U&"!006dessages" UESCAPE \'!\'',
 ]
 
 
