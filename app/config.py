@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     # LLM
     llm_provider: str = "anthropic"
     anthropic_api_key: str = ""
+    anthropic_model: str = "claude-opus-5-5"
 
     # Database
     database_url: str = "postgresql://postgres:postgres@localhost:5432/nl_db_agent"
